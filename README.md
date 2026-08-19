@@ -1,4 +1,4 @@
-# Order & Delivery Support Agent — Basic Version
+# Order & Delivery Support Agent 
 
 A working slice of the full system in your spec: a real **LangGraph
 ReAct agent** over **LangChain** tools, backed by **Gemini 2.5 Flash**.
