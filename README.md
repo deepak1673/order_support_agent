@@ -1,78 +1,63 @@
-# Order & Delivery Support Agent 
+# Order & Delivery Support Agent
 
-A working slice of the full system in your spec: a real **LangGraph
-ReAct agent** over **LangChain** tools, backed by **Gemini 2.5 Flash**.
-No Postgres, no AfterShip, no Next.js frontend yet — data is an
-in-memory mock store so you can run and test the agent loop itself
-today.
+A LangGraph ReAct agent (Gemini 2.5 Flash + LangChain tools) that answers
+order, shipment and ticket questions for authenticated customers. Business
+data lives in SQLite; the LLM only reaches it through customer-scoped tools.
 
-## What's actually real here
-- Real `langgraph.StateGraph` with an agent node + tool node + a
-  conditional edge that loops until the model stops calling tools.
-- Real LangChain `@tool`-decorated functions, bound to Gemini via
-  `bind_tools`.
-- Real security pattern: tools are built per-request closed over the
-  authenticated `customer_id`, so the model can never fetch another
-  customer's order/ticket data even if it tries.
-- A FastAPI `/chat` endpoint and a CLI `demo.py` to exercise it.
+For the full design, roadmap and known gaps, see
+[ORDER_SUPPORT_AGENT_README.md](ORDER_SUPPORT_AGENT_README.md).
 
-## What's mocked (intentionally, for this stage)
-- `mock_data.py` stands in for PostgreSQL — same shape as the tables
-  in your spec (customers, orders, shipments, tickets), just in-memory.
-- No AfterShip integration — tracking data is hardcoded sample events.
-- No auth/RBAC layer — `customer_id` is passed directly in the request.
-- No RAG / policy retrieval, no ticket escalation UI, no dashboards.
+## What's implemented
+- LangGraph `StateGraph`: agent node + tool node, looping until the model stops calling tools.
+- Seven LangChain tools (orders, tracking, tickets, refund eligibility, cancellation), built per request and closed over the authenticated `customer_id`, so the model never supplies its own customer identity.
+- JWT auth (`/auth/register`, `/auth/login`) with PBKDF2-hashed passwords.
+- SQLite + SQLAlchemy persistence: customers, orders, shipments, tickets, conversations, messages.
+- Persisted multi-turn conversation memory.
+- FastAPI backend, Streamlit chat UI, and a CLI demo.
+
+## Still mocked / missing
+- Shipment tracking is seeded sample data (no AfterShip).
+- Cancellation executes immediately; no human approval step.
+- No RAG/policy retrieval, rate limiting, observability or eval suite.
+- SQLite instead of Postgres.
 
 ## Setup
 ```bash
-cd order_support_agent
-python -m venv venv && source venv/bin/activate   # or your preferred env tool
+python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env
-# put your Gemini API key in .env
+cp .env.example .env    # set GOOGLE_API_KEY and JWT_SECRET (JWT_SECRET is required)
+python seed.py          # creates order_support.db with demo data
 ```
 
-## Run the CLI demo (fastest way to see it work)
-```bash
-python demo.py
-```
-This runs three sample customer messages through the agent and prints
-which tools it chose to call and its final answer for each — this is
-the "tool trace" your README's UI wants to surface (e.g. "✓ Order
-retrieved, ✓ Tracking checked").
+Demo logins (password `password123`):
+- `aditi@example.com` (C1024): `ORD123` shipped/delayed, `ORD124` delivered
+- `marcus@example.com` (C2001): `ORD200` processing, still cancellable
 
-## Run the API
+## Run
 ```bash
-uvicorn main:app --reload
-```
-```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"customer_id": "C1024", "message": "Where is my order ORD123?"}'
+python demo.py                    # CLI: three sample queries, prints tool trace
+uvicorn main:app --reload         # API on :8000
+streamlit run streamlit_app.py    # chat UI (API must be running)
 ```
 
-Try customer `C1024` (has a delayed shipment on `ORD123`, a delivered
-order `ORD124`) and `C2001` (has a `PROCESSING` order `ORD200` that can
-still be cancelled).
+```bash
+TOKEN=$(curl -s -X POST localhost:8000/auth/login -H "Content-Type: application/json" \
+  -d '{"email":"aditi@example.com","password":"password123"}' | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+
+curl -X POST localhost:8000/chat -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" -d '{"message":"Where is my order ORD123?"}'
+```
 
 ## File map
 ```
-mock_data.py   # in-memory "database" — swap for real Postgres later
-tools.py       # LangChain tools, scoped to one customer_id
-agent.py       # the LangGraph ReAct graph + run_agent() entrypoint
-main.py        # FastAPI /chat endpoint
-demo.py        # CLI runner, no server needed
+agent.py          LangGraph ReAct graph + run_agent()
+tools.py          LangChain tools scoped to one customer_id
+crud.py           data-access functions used by tools and API
+db.py             SQLAlchemy models + engine
+security.py       password hashing + JWT
+seed.py           creates and seeds the SQLite DB
+main.py           FastAPI app (auth, conversations, /chat)
+streamlit_app.py  chat UI
+demo.py           CLI runner
+mock_data.py      legacy in-memory store (unused)
 ```
-
-## Next steps (matches your spec's build order)
-1. Swap `mock_data.py` for real Postgres (SQLAlchemy) — nothing in
-   `tools.py` or `agent.py` needs to change if you keep the same
-   function signatures.
-2. Add real shipment tracking via AfterShip in `get_tracking_status`.
-3. Add short-term memory by persisting `history` per conversation
-   (e.g. Redis or a `conversations` table) and passing it into
-   `run_agent(..., history=...)`.
-4. Add auth so `customer_id` comes from a verified session, not the
-   request body.
-5. Add ticket escalation rules and human-approval gating on
-   `request_cancellation` before it's a real state change.

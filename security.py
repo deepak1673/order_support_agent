@@ -13,11 +13,18 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "60"))
 
 PBKDF2_ITERATIONS = 200_000
+
+
+def _jwt_secret() -> str:
+    """Read lazily so seed.py (which only hashes passwords) needn't set it."""
+    secret = os.environ.get("JWT_SECRET")
+    if not secret:
+        raise RuntimeError("JWT_SECRET is not set. Add it to .env (see .env.example).")
+    return secret
 
 
 def hash_password(password: str) -> str:
@@ -41,13 +48,13 @@ def create_access_token(customer_id: str) -> str:
         "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES),
         "iat": datetime.now(timezone.utc),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, _jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
 def decode_access_token(token: str) -> str | None:
     """Returns customer_id if valid, else None."""
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, _jwt_secret(), algorithms=[JWT_ALGORITHM])
         return payload.get("sub")
     except jwt.PyJWTError:
         return None
